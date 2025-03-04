@@ -6,7 +6,7 @@
 /*   By: ucolla <ucolla@student.42.fr>              +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/03/04 13:56:12 by ucolla            #+#    #+#             */
-/*   Updated: 2025/03/04 17:47:14 by ucolla           ###   ########.fr       */
+/*   Updated: 2025/03/04 20:13:19 by ucolla           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -43,6 +43,12 @@
 #define PURPLE "\033[0;35m"
 #define RESET "\033[0m"
 
+#define JUMP "\033[1;0H"
+#define VECTOR "\033[2;0H"
+#define TILE_FALLS "\033[3;0H"
+#define THREAD_ROUTINE "\033[4;0H"
+// #define FIRST_LINE "\033[1;0H"
+
 typedef std::vector<int> vec;
 
 class Platformer
@@ -64,7 +70,10 @@ public:
 	std::mutex		mtx_stdout;
 	std::mutex		mtx_victory;
 
-	/* Constructor */
+	/**
+	 * Constructor
+	 * @param n numero
+	 */
     Platformer(int n, int position) : gameOver(false)
     {
 		srand(time(0));
@@ -86,6 +95,13 @@ public:
 	/* Destructor */
 	~Platformer() {} 
 
+	void	debug(const std::string &str) {
+		mtx_stdout.lock();
+		std::cout << str << std::endl;
+		mtx_stdout.unlock();
+	}
+	
+
 	void	randomSleep() {
 		int timeToWait = ((rand() % 3) + 1) * 500;
 		std::this_thread::sleep_for(std::chrono::milliseconds(timeToWait));
@@ -93,6 +109,9 @@ public:
 
     void	jumpLeft()
     {
+		if (gameOver)
+			return ;
+		// debug("Entering jumpLeft()\n");
 		mtx_tiles.lock();
         auto it = find(tiles.begin(), tiles.end(), current);
         size_t index = std::distance(tiles.begin(), it);
@@ -106,7 +125,7 @@ public:
 					<< std::endl;
 			mtx_stdout.unlock();
 			
-			if (index < 2 && index > tiles.size() - 3)
+			if (tiles.size() == 3 || (index < 2 && index > tiles.size() - 3))
 			{
 				mtx_victory.lock();
 				victory = true;
@@ -118,10 +137,12 @@ public:
 			if (index < tiles.size() - 3)
 			{
 				mtx_tiles.unlock();
+				randomSleep();
 				jumpRight();
 				return;
 			}
 		}
+		// debug("Move player left\n");
 		it -= 2;
 		auto ite = find(tiles.begin(), tiles.end(), *it);
 		current = *ite;
@@ -136,6 +157,9 @@ public:
 
     void	jumpRight() 
     {
+		if (gameOver)
+			return ;
+		// debug("Entering jumpRight()\n");
 		mtx_tiles.lock();
         auto it = find(tiles.begin(), tiles.end(), current);
         size_t index = std::distance(tiles.begin(), it);
@@ -150,7 +174,7 @@ public:
 					<< std::endl;
 			mtx_stdout.unlock();
 
-			if (index > tiles.size() - 3 && index < 2)
+			if (tiles.size() == 3 || (index > tiles.size() - 3 && index < 2))
 			{
 				mtx_victory.lock();
 				victory = true;
@@ -161,14 +185,15 @@ public:
 			if (index > 2)
 			{
 				mtx_tiles.unlock();
+				randomSleep();
 				jumpLeft();
 				return ;
 			}
 			
 			mtx_tiles.unlock();
 			return ;
-			// throw std::logic_error("Impossible to jump right\n");
 		}
+		// debug("Move player right\n");
 		it += 2;
 		auto ite = find(tiles.begin(), tiles.end(), *it);
 		current = *ite;
@@ -188,6 +213,7 @@ public:
 
     int		tileFalls()
     {
+		// debug("Entering tileFalls()\n");
         int randomTile = rand() % tilesNumber;
 		mtx_tiles.lock();
 		if (tiles.size() < 3)
@@ -206,7 +232,11 @@ public:
 		}
 		tiles.erase(it);
 		mtx_stdout.lock();
-		std::cout << "Dropping tile number " << YELLOW << randomTile << RESET << std::endl;
+		std::cout << "Dropping tile number "
+				<< YELLOW
+				<< randomTile
+				<< RESET
+				<< std::endl;
 		mtx_stdout.unlock();
 		mtx_tiles.unlock();
 		
@@ -218,7 +248,7 @@ public:
 			mtx_game_over.unlock();
 			
 			mtx_stdout.lock();
-			std::cout << "The tile "
+			std::cout << "\nThe tile "
 					<< randomTile
 					<< " where the character was standing just fell down!"
 					<< std::endl;
@@ -235,6 +265,8 @@ public:
 
 	void 	print_container(const vec& c)
 	{
+		if (gameOver)
+			return ;
 		mtx_stdout.lock();
 		mtx_tiles.lock();
 		vec::const_iterator it = c.begin();
@@ -250,29 +282,26 @@ public:
 			else
 				std::cout << "* ";
 		}
-		std::cout << '\n';
+		std::cout << std::endl;
 		mtx_tiles.unlock();
 		mtx_stdout.unlock();
 	}
 
-	void 	resetCursor() {
-		std::cout << "\r\033[K";
-	}
+	// void 	clear() {
+	// 	std::cout << "\r\033[K";
+	// }
 
-	void 	printInPlaceMethod1() {
+	void 	printFormatted() {
 		for (int i = 0; i < 10; ++i) {
-			// Move cursor to beginning of line and clear the line
-			std::cout << "\r\033[K";
-			std::cout << "Current value: " << i;
+			std::cout << "Current value: " << i << std::endl;
 			std::cout.flush(); // Ensure immediate output
-			std::this_thread::sleep_for(std::chrono::milliseconds(500));
 		}
-		std::cout << std::endl; // Final newline
 	}
 
 };
 
 void routine(Platformer &platformer) {
+	platformer.randomSleep();
 	
 	platformer.mtx_stdout.lock();
 	std::cout << PURPLE << "STARTING thread routine\n" << RESET;
@@ -286,6 +315,7 @@ void routine(Platformer &platformer) {
 			return ;
 		}
 		platformer.mtx_victory.unlock();
+		
 		platformer.mtx_game_over.lock();
 		if (platformer.gameOver == true)
 		{
@@ -293,13 +323,7 @@ void routine(Platformer &platformer) {
 			return ;
 		}
 		platformer.mtx_game_over.unlock();
-		
-		platformer.mtx_tiles.lock();
-		if (platformer.tiles.size() < 3)
-		{
-			
-		}
-		platformer.mtx_tiles.lock();
+
 		platformer.tileFalls();
 		// platformer.print_container(platformer.tiles);
 		platformer.randomSleep();
@@ -334,30 +358,28 @@ int main(int ac, char **av)
 		
 		while(!platformer.victory)
 		{
-			platformer.mtx_game_over.lock();
 			if (platformer.gameOver)
 			{
-				platformer.mtx_game_over.unlock();
 				t.join();
-				throw std::logic_error("Game Over\n");
-				// break ;
+				throw std::logic_error(RED "\nGAME OVER\n" RESET);
 			}
-			platformer.mtx_game_over.unlock();
 			
 			int jump = rand() % 2;
 			jump ? platformer.jumpRight() : platformer.jumpLeft();
 			
+			platformer.randomSleep();
 			platformer.print_container(platformer.tiles);
-			
 		}
-
+		
+		if (platformer.victory)
+			throw std::logic_error(GREEN "\nVICTORY\n" RESET);
 		t.join();
 		
 	} catch(std::logic_error &e) {
+		std::cout << e.what() << RESET << std::endl;
+	} catch(std::exception &e) {
 		std::cout << RED << e.what() << RESET << std::endl;
-	} catch (const std::exception& e) {
-        std::cout << RED << "Unhandled exception in main: " << e.what() << RESET << std::endl;
-    }
+	}
 	return 0;
 }
 #endif
