@@ -6,7 +6,7 @@
 /*   By: ucolla <ucolla@student.42.fr>              +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/03/04 13:56:12 by ucolla            #+#    #+#             */
-/*   Updated: 2025/03/04 20:13:19 by ucolla           ###   ########.fr       */
+/*   Updated: 2025/03/05 17:07:46 by ucolla           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -47,6 +47,10 @@
 #define VECTOR "\033[2;0H"
 #define TILE_FALLS "\033[3;0H"
 #define THREAD_ROUTINE "\033[4;0H"
+
+#define VICTORY 0
+#define GAMEOVER 1
+#define THREAD 2
 // #define FIRST_LINE "\033[1;0H"
 
 typedef std::vector<int> vec;
@@ -61,20 +65,21 @@ public:
     vec     		tiles;
     int     		current;
     int     		tilesNumber;
-	bool			gameOver;
-	bool			victory;
+	int				result;
+	bool			simulationStop;
 	
 	std::mutex		mtx_tiles;
 	std::mutex 		mtx_game_over;
 	std::mutex		mtx_current;
 	std::mutex		mtx_stdout;
-	std::mutex		mtx_victory;
+	std::mutex		mtx_result;
+	std::mutex		mtx_simulation;
 
 	/**
 	 * Constructor
 	 * @param n numero
 	 */
-    Platformer(int n, int position) : gameOver(false)
+    Platformer(int n, int position) : result(0), simulationStop(false)
     {
 		srand(time(0));
         if (n <= 0)
@@ -93,7 +98,27 @@ public:
     }
 
 	/* Destructor */
-	~Platformer() {} 
+	~Platformer() {}
+
+	/* bool	isGameOver() {
+		mtx_simulation.lock();
+		if (gameOver)
+		{
+			mtx_simulation.unlock();
+			throw std::logic_error(RED "\nGAME OVER\n" RESET);
+		}
+		mtx_simulation.unlock();
+		return false;
+	} */
+
+	bool isVictory() {
+		mtx_simulation.lock();
+		mtx_tiles.lock();
+		bool ret = tiles.size() <= 3;
+		mtx_simulation.unlock();
+		mtx_tiles.unlock();
+		return ret;
+	}
 
 	void	debug(const std::string &str) {
 		mtx_stdout.lock();
@@ -101,16 +126,35 @@ public:
 		mtx_stdout.unlock();
 	}
 	
+	void	setResult(int n) {
+		mtx_result.lock();
+		result = n;
+		mtx_result.unlock();
+	}
 
 	void	randomSleep() {
 		int timeToWait = ((rand() % 3) + 1) * 500;
 		std::this_thread::sleep_for(std::chrono::milliseconds(timeToWait));
 	}
 
+	bool	stopSimulation() {
+		mtx_simulation.lock();
+		bool ret = simulationStop;
+		mtx_simulation.unlock();
+		return ret;
+	}
+
     void	jumpLeft()
     {
-		if (gameOver)
+		if (isVictory())
+		{
+			mtx_simulation.lock();
+			simulationStop = true;
+			mtx_simulation.unlock();
+			setResult(VICTORY);
 			return ;
+		}
+		
 		// debug("Entering jumpLeft()\n");
 		mtx_tiles.lock();
         auto it = find(tiles.begin(), tiles.end(), current);
@@ -119,20 +163,17 @@ public:
 		if (index < 2)
 		{
 			mtx_stdout.lock();
-			std::cout << "Current tile index: "
-					<< index
-					<< ". Cannot jump left!"
-					<< std::endl;
+			std::cout << "Cannot jump left!" << std::endl;
 			mtx_stdout.unlock();
 			
-			if (tiles.size() == 3 || (index < 2 && index > tiles.size() - 3))
+			/* if (tiles.size() == 3 || (index < 2 && index > tiles.size() - 3))
 			{
 				mtx_victory.lock();
 				victory = true;
 				mtx_victory.unlock();
 				mtx_tiles.unlock();
 				return;
-			}
+			} */
 
 			if (index < tiles.size() - 3)
 			{
@@ -145,20 +186,31 @@ public:
 		// debug("Move player left\n");
 		it -= 2;
 		auto ite = find(tiles.begin(), tiles.end(), *it);
+
+		mtx_current.lock();
 		current = *ite;
+		mtx_current.unlock();
+		
+		mtx_stdout.lock();
+		std::cout << "Jumping LEFT"<< std::endl;
+		print_container(tiles, 0);
+		mtx_stdout.unlock();
 		mtx_tiles.unlock();
 
-		mtx_stdout.lock();
-		std::cout << "Jumping left to tile " << *ite << std::endl;
-		mtx_stdout.unlock();
-		
 		randomSleep();
     }
 
     void	jumpRight() 
     {
-		if (gameOver)
+		if (isVictory())
+		{
+			mtx_simulation.lock();
+			simulationStop = true;
+			mtx_simulation.unlock();
+			setResult(VICTORY);
 			return ;
+		}
+		
 		// debug("Entering jumpRight()\n");
 		mtx_tiles.lock();
         auto it = find(tiles.begin(), tiles.end(), current);
@@ -167,21 +219,18 @@ public:
 		if (index > tiles.size() - 3)
 		{
 			mtx_stdout.lock();
-			std::cout << "Current tile index: "
-					<< index << ", max_index: "
-					<< tiles.size() - 1
-					<< ". Cannot jump right!"
-					<< std::endl;
+			std::cout << "Cannot jump right!" << std::endl;
 			mtx_stdout.unlock();
 
-			if (tiles.size() == 3 || (index > tiles.size() - 3 && index < 2))
+			/* if (tiles.size() == 3 || (index > tiles.size() - 3 && index < 2))
 			{
 				mtx_victory.lock();
 				victory = true;
 				mtx_victory.unlock();
 				mtx_tiles.unlock();
+				throw std::logic_error("\nVICTORY\n");
 				return ;
-			}
+			} */
 			if (index > 2)
 			{
 				mtx_tiles.unlock();
@@ -196,12 +245,17 @@ public:
 		// debug("Move player right\n");
 		it += 2;
 		auto ite = find(tiles.begin(), tiles.end(), *it);
+
+		mtx_current.lock();
 		current = *ite;
-		mtx_tiles.unlock();
+		mtx_current.unlock();
 		
 		mtx_stdout.lock();
-		std::cout << "Jumping right to tile " << *ite << std::endl;
+		std::cout << "Jumping RIGHT" << std::endl;
+		print_container(tiles, 0);
 		mtx_stdout.unlock();
+		mtx_tiles.unlock();
+		
 		randomSleep();
     }
 
@@ -218,9 +272,9 @@ public:
 		mtx_tiles.lock();
 		if (tiles.size() < 3)
 		{
-			mtx_victory.lock();
-			victory = true;
-			mtx_victory.unlock();
+			mtx_simulation.lock();
+			simulationStop = true;
+			mtx_simulation.unlock();
 			mtx_tiles.unlock();
 			return -1;
 		}
@@ -231,21 +285,23 @@ public:
 			it = find(tiles.begin(), tiles.end(), randomTile);
 		}
 		tiles.erase(it);
+		
 		mtx_stdout.lock();
 		std::cout << "Dropping tile number "
 				<< YELLOW
 				<< randomTile
 				<< RESET
 				<< std::endl;
+		print_container(tiles, THREAD);
 		mtx_stdout.unlock();
 		mtx_tiles.unlock();
 		
-		mtx_current.lock();
         if (randomTile == current)
 		{
-			mtx_game_over.lock();
-			gameOver = true;
-			mtx_game_over.unlock();
+			mtx_simulation.lock();
+			simulationStop = true;
+			mtx_simulation.unlock();
+			setResult(GAMEOVER);
 			
 			mtx_stdout.lock();
 			std::cout << "\nThe tile "
@@ -253,49 +309,37 @@ public:
 					<< " where the character was standing just fell down!"
 					<< std::endl;
 			mtx_stdout.unlock();
-			mtx_current.unlock();
 			
 			return randomTile;
 		}
-		mtx_current.unlock();
 		randomSleep();
 		
         return randomTile;
     }
 
-	void 	print_container(const vec& c)
+	void 	print_container(const vec& c, int thread)
 	{
-		if (gameOver)
-			return ;
-		mtx_stdout.lock();
-		mtx_tiles.lock();
-		vec::const_iterator it = c.begin();
-		for (int counter = 0; counter < tilesNumber; counter++) {
-			if (counter == *it) {
-				mtx_current.lock();
-				if (*it == current)
-					std::cout << YELLOW;
-				mtx_current.unlock();
-				std::cout << *it << " " << RESET;
-				it++;
+		if (!simulationStop)
+		{
+			vec::const_iterator it = c.begin();
+			for (int counter = 0; counter < tilesNumber; counter++) {
+				if (counter == *it) {
+					mtx_current.lock();
+					if (*it == current)
+						std::cout << YELLOW;
+					mtx_current.unlock();
+					std::cout << *it << " " << RESET;
+					if (it + 1 != c.end())
+						it++;
+				}
+				else
+					std::cout << "* ";
 			}
-			else
-				std::cout << "* ";
+			if (thread == THREAD)
+				std::cout << PURPLE << "	THREAD" << RESET;
+			std::cout << std::endl << std::endl;
 		}
-		std::cout << std::endl;
-		mtx_tiles.unlock();
-		mtx_stdout.unlock();
-	}
-
-	// void 	clear() {
-	// 	std::cout << "\r\033[K";
-	// }
-
-	void 	printFormatted() {
-		for (int i = 0; i < 10; ++i) {
-			std::cout << "Current value: " << i << std::endl;
-			std::cout.flush(); // Ensure immediate output
-		}
+		
 	}
 
 };
@@ -307,25 +351,24 @@ void routine(Platformer &platformer) {
 	std::cout << PURPLE << "STARTING thread routine\n" << RESET;
 	platformer.mtx_stdout.unlock();
 	
-	while(!platformer.victory) {
-		platformer.mtx_victory.lock();
-		if (platformer.victory)
-		{
-			platformer.mtx_victory.unlock();		
-			return ;
-		}
-		platformer.mtx_victory.unlock();
+	while(!platformer.stopSimulation()) {
+		// platformer.mtx_victory.lock();
+		// if (platformer.victory)
+		// {
+		// 	platformer.mtx_victory.unlock();		
+		// 	return ;
+		// }
+		// platformer.mtx_victory.unlock();
 		
-		platformer.mtx_game_over.lock();
-		if (platformer.gameOver == true)
-		{
-			platformer.mtx_game_over.unlock();
-			return ;
-		}
-		platformer.mtx_game_over.unlock();
+		// platformer.mtx_game_over.lock();
+		// if (platformer.gameOver == true)
+		// {
+		// 	platformer.mtx_game_over.unlock();
+		// 	return ;
+		// }
+		// platformer.mtx_game_over.unlock();
 
 		platformer.tileFalls();
-		// platformer.print_container(platformer.tiles);
 		platformer.randomSleep();
 	}
 
@@ -354,31 +397,39 @@ int main(int ac, char **av)
 	
 	try {
 		Platformer platformer(n, position);
+		
+		std::cout << GREEN << "START OF PLATFORMER\n" << RESET;
+		std::cout << "Staring position on tile " << platformer.current << std::endl;
+		platformer.print_container(platformer.tiles, 0);
+		
 		std::thread t(routine, std::ref(platformer));
 		
-		while(!platformer.victory)
+		while(!platformer.stopSimulation())
 		{
+			/* platformer.mtx_game_over.lock();
+			platformer.isVictory();
 			if (platformer.gameOver)
 			{
+				platformer.mtx_game_over.unlock();
 				t.join();
 				throw std::logic_error(RED "\nGAME OVER\n" RESET);
 			}
+			platformer.mtx_game_over.unlock(); */
 			
 			int jump = rand() % 2;
 			jump ? platformer.jumpRight() : platformer.jumpLeft();
-			
-			platformer.randomSleep();
-			platformer.print_container(platformer.tiles);
 		}
-		
-		if (platformer.victory)
-			throw std::logic_error(GREEN "\nVICTORY\n" RESET);
+	
 		t.join();
+		if (platformer.result == VICTORY)
+			throw std::logic_error(GREEN "\nVICTORY\n" RESET);
+		else
+			throw std::logic_error(RED "\nGAMEOVER\n" RESET);
 		
 	} catch(std::logic_error &e) {
-		std::cout << e.what() << RESET << std::endl;
+		std::cout << e.what() << std::endl << std::flush;
 	} catch(std::exception &e) {
-		std::cout << RED << e.what() << RESET << std::endl;
+		std::cout << RED << e.what() << RESET << std::endl << std::flush;
 	}
 	return 0;
 }
