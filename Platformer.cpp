@@ -6,7 +6,7 @@
 /*   By: ucolla <ucolla@student.42.fr>              +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/03/04 13:56:12 by ucolla            #+#    #+#             */
-/*   Updated: 2025/03/05 17:07:46 by ucolla           ###   ########.fr       */
+/*   Updated: 2025/03/05 19:09:23 by ucolla           ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -37,28 +37,58 @@
  * Calling tileFalls() will return a random number from 0 to n or a GameOver exception.
 */
 
+/**
+ * ******************** PLATFORMER ********************
+ * 
+ * The implementation of the program is done with a main function that simulates the character starting on @param position
+ * and jumping randomly on the tiles floor. It does so each time after waiting a random delay. There is a thread, created right after 
+ * the creation of the @param Platformer object, that simulates tiles falling randomly. The two threads synchronize each other
+ * by checking continuosly on some shared variables, like @param simulationStop, to know how to behave or when to stop.
+ * To avoid data races and undefined or unwanted behaviors mutexes protect writing and reading operations on the shared variables.
+ * 
+ * The game stops with GAMEOVER if the tile where the character is standing is dropped.
+ * It terminates with VICTORY if the character survives until only three tiles are left.
+ * 
+ * To compile the program run the command 'make' or compile it like this:
+ * 
+ * 	c++ -W -W -W -pthread -std=c++11 Platformer.cpp -o Platformer
+ * 
+ * It will create the executable 'Platformer'.
+ * To run the program then launch:
+ * 	
+ * 	./Platformer [number_of_tiles] [character_starting_position]
+ * 
+ * [WARNING]
+ * Any value assigned to @param number_of_tiles or @param character_starting_position that isn't an integer will
+ * evaluate to zero in case of string or a single character, or to the rounded down integer in case of decimal numbers.
+ * 
+ * 	./Platformer 4.5 'ciao' is like running ./Platformer 4 0
+ * 
+ */
+
 #define RED "\033[0;31m"
 #define GREEN "\033[0;32m"
 #define YELLOW "\033[0;33m"
 #define PURPLE "\033[0;35m"
 #define RESET "\033[0m"
 
-#define JUMP "\033[1;0H"
-#define VECTOR "\033[2;0H"
-#define TILE_FALLS "\033[3;0H"
-#define THREAD_ROUTINE "\033[4;0H"
-
 #define VICTORY 0
 #define GAMEOVER 1
 #define THREAD 2
-// #define FIRST_LINE "\033[1;0H"
 
 typedef std::vector<int> vec;
 
+/**
+ * @param tiles				vector storing all the tiles of the game
+ * @param current			current position of the character
+ * @param tilesNumber		total amount of tiles
+ * @param result			variable to store the ending result of the game -> VICTORY or GAME OVER
+ * @param simulationStop	checker to track if the game should stop or continue
+ *
+ * @param mtx_***			mutexes to prevent dataraces on shared variables between threads			
+ */
 class Platformer
 {
-
-// private: 
 
 public:
 
@@ -69,7 +99,6 @@ public:
 	bool			simulationStop;
 	
 	std::mutex		mtx_tiles;
-	std::mutex 		mtx_game_over;
 	std::mutex		mtx_current;
 	std::mutex		mtx_stdout;
 	std::mutex		mtx_result;
@@ -77,7 +106,10 @@ public:
 
 	/**
 	 * Constructor
-	 * @param n numero
+	 * @param n 		starting number of tiles
+	 * @param position	startin position of the character
+	 * 
+	 * It initiates the Platformer object and performs initial checks on the variables passed to the program.
 	 */
     Platformer(int n, int position) : result(0), simulationStop(false)
     {
@@ -86,9 +118,11 @@ public:
             throw std::logic_error("Cannot create a row of tiles with zero or negative tiles.");
 		if (n < 3)
 			throw std::logic_error("Tiles floor needs to have at least 3 tiles.");
+		if (n > 100)
+			throw std::logic_error("Max tiles amount is 100, the game could become veeeery looong otherwise :)");
 		if (position < 0)
 			throw std::logic_error("The character cannot be on a negative tile.");
-		if (position > n)
+		if (position >= n)
 			throw std::logic_error("The character cannot be outside the tiles floor.");
         for (int i = 0; i < n; i++) {
             tiles.push_back(i);
@@ -97,19 +131,10 @@ public:
         tilesNumber = n;
     }
 
-	/* Destructor */
+	/**
+	 * Destructor
+	 */
 	~Platformer() {}
-
-	/* bool	isGameOver() {
-		mtx_simulation.lock();
-		if (gameOver)
-		{
-			mtx_simulation.unlock();
-			throw std::logic_error(RED "\nGAME OVER\n" RESET);
-		}
-		mtx_simulation.unlock();
-		return false;
-	} */
 
 	bool isVictory() {
 		mtx_simulation.lock();
@@ -119,12 +144,6 @@ public:
 		mtx_tiles.unlock();
 		return ret;
 	}
-
-	void	debug(const std::string &str) {
-		mtx_stdout.lock();
-		std::cout << str << std::endl;
-		mtx_stdout.unlock();
-	}
 	
 	void	setResult(int n) {
 		mtx_result.lock();
@@ -132,6 +151,10 @@ public:
 		mtx_result.unlock();
 	}
 
+	/**
+	 * Function that make the cpu wait for @param timeToWait ms;
+	 * At each call it waits for a random amount of time between 500 and 1500 ms.
+	 */
 	void	randomSleep() {
 		int timeToWait = ((rand() % 3) + 1) * 500;
 		std::this_thread::sleep_for(std::chrono::milliseconds(timeToWait));
@@ -144,6 +167,10 @@ public:
 		return ret;
 	}
 
+	/**
+	 * This function moves the character two tiles to the left, if it is possible.
+	 * It calls jumpRight otherwise or return to main() if the simulation ended.
+	 */
     void	jumpLeft()
     {
 		if (isVictory())
@@ -154,8 +181,7 @@ public:
 			setResult(VICTORY);
 			return ;
 		}
-		
-		// debug("Entering jumpLeft()\n");
+
 		mtx_tiles.lock();
         auto it = find(tiles.begin(), tiles.end(), current);
         size_t index = std::distance(tiles.begin(), it);
@@ -165,17 +191,8 @@ public:
 			mtx_stdout.lock();
 			std::cout << "Cannot jump left!" << std::endl;
 			mtx_stdout.unlock();
-			
-			/* if (tiles.size() == 3 || (index < 2 && index > tiles.size() - 3))
-			{
-				mtx_victory.lock();
-				victory = true;
-				mtx_victory.unlock();
-				mtx_tiles.unlock();
-				return;
-			} */
 
-			if (index < tiles.size() - 3)
+			if (index < tiles.size() - 3 && !stopSimulation())
 			{
 				mtx_tiles.unlock();
 				randomSleep();
@@ -183,7 +200,6 @@ public:
 				return;
 			}
 		}
-		// debug("Move player left\n");
 		it -= 2;
 		auto ite = find(tiles.begin(), tiles.end(), *it);
 
@@ -193,13 +209,17 @@ public:
 		
 		mtx_stdout.lock();
 		std::cout << "Jumping LEFT"<< std::endl;
-		print_container(tiles, 0);
+		print_container(tiles, 0, -1);
 		mtx_stdout.unlock();
 		mtx_tiles.unlock();
 
 		randomSleep();
     }
 
+	/**
+	 * This function moves the character two tiles to the right, if it is possible.
+	 * It calls jumpLeft otherwise or return to main() if the simulation ended.
+	 */
     void	jumpRight() 
     {
 		if (isVictory())
@@ -210,8 +230,7 @@ public:
 			setResult(VICTORY);
 			return ;
 		}
-		
-		// debug("Entering jumpRight()\n");
+
 		mtx_tiles.lock();
         auto it = find(tiles.begin(), tiles.end(), current);
         size_t index = std::distance(tiles.begin(), it);
@@ -221,17 +240,8 @@ public:
 			mtx_stdout.lock();
 			std::cout << "Cannot jump right!" << std::endl;
 			mtx_stdout.unlock();
-
-			/* if (tiles.size() == 3 || (index > tiles.size() - 3 && index < 2))
-			{
-				mtx_victory.lock();
-				victory = true;
-				mtx_victory.unlock();
-				mtx_tiles.unlock();
-				throw std::logic_error("\nVICTORY\n");
-				return ;
-			} */
-			if (index > 2)
+			
+			if (index > 2 && !stopSimulation())
 			{
 				mtx_tiles.unlock();
 				randomSleep();
@@ -242,7 +252,6 @@ public:
 			mtx_tiles.unlock();
 			return ;
 		}
-		// debug("Move player right\n");
 		it += 2;
 		auto ite = find(tiles.begin(), tiles.end(), *it);
 
@@ -252,7 +261,7 @@ public:
 		
 		mtx_stdout.lock();
 		std::cout << "Jumping RIGHT" << std::endl;
-		print_container(tiles, 0);
+		print_container(tiles, 0, -1);
 		mtx_stdout.unlock();
 		mtx_tiles.unlock();
 		
@@ -262,15 +271,16 @@ public:
     int		currentTile() 
     {
         return current;
-        // throw std::logic_error("Waiting to be implemented");
     }
 
+	/**
+	 * This function generate a random number between 0 and @param tilesNumber and erases it from the tiles vector.
+	 */
     int		tileFalls()
     {
-		// debug("Entering tileFalls()\n");
         int randomTile = rand() % tilesNumber;
 		mtx_tiles.lock();
-		if (tiles.size() < 3)
+		if (tiles.size() <= 3)
 		{
 			mtx_simulation.lock();
 			simulationStop = true;
@@ -292,7 +302,7 @@ public:
 				<< randomTile
 				<< RESET
 				<< std::endl;
-		print_container(tiles, THREAD);
+		print_container(tiles, THREAD, randomTile);
 		mtx_stdout.unlock();
 		mtx_tiles.unlock();
 		
@@ -317,7 +327,17 @@ public:
         return randomTile;
     }
 
-	void 	print_container(const vec& c, int thread)
+	/**
+	 * @param c			vector to print on the standard out
+	 * @param thread	flag to print specific output when run in the thread routine
+	 * @param toDrop	tile that has been droppped by tileFalls
+	 * 
+	 * It prints the tiles vector with different colors and formatting:
+	 * - Yellow for the character position
+	 * - red for the tile that has just been dropped
+	 * - '*' for the tiles that has already been dropped
+	 */
+	void 	print_container(const vec& c, int thread, int toDrop)
 	{
 		if (!simulationStop)
 		{
@@ -333,17 +353,27 @@ public:
 						it++;
 				}
 				else
-					std::cout << "* ";
+				{
+					if (counter == toDrop)
+						std::cout << RED << counter << " " << RESET;
+					else 
+						std::cout << "* ";
+				}
 			}
 			if (thread == THREAD)
 				std::cout << PURPLE << "	THREAD" << RESET;
 			std::cout << std::endl << std::endl;
 		}
-		
 	}
-
 };
 
+/**
+ * @param platformer	the Platformer object that stores all the variables
+ * 
+ * It calls tileFalls to erase tiles from the tiles vector, simulating tiles falling.
+ * It keeps doing so untils the end of the simulation.
+ * It adds purple prints at the eginning and at the end of the simulation for readability.
+ */
 void routine(Platformer &platformer) {
 	platformer.randomSleep();
 	
@@ -351,23 +381,8 @@ void routine(Platformer &platformer) {
 	std::cout << PURPLE << "STARTING thread routine\n" << RESET;
 	platformer.mtx_stdout.unlock();
 	
-	while(!platformer.stopSimulation()) {
-		// platformer.mtx_victory.lock();
-		// if (platformer.victory)
-		// {
-		// 	platformer.mtx_victory.unlock();		
-		// 	return ;
-		// }
-		// platformer.mtx_victory.unlock();
-		
-		// platformer.mtx_game_over.lock();
-		// if (platformer.gameOver == true)
-		// {
-		// 	platformer.mtx_game_over.unlock();
-		// 	return ;
-		// }
-		// platformer.mtx_game_over.unlock();
-
+	while(!platformer.stopSimulation())
+	{
 		platformer.tileFalls();
 		platformer.randomSleep();
 	}
@@ -378,6 +393,12 @@ void routine(Platformer &platformer) {
 
 }
 
+/**
+ * The main function.
+ * After initial checks on the variables passed to the program, it starts the simulation.
+ * It keeps make the character jumps randomly left or right until the simulation stops.
+ * It finally throws an error to announce VICTORY or GAME OVER.
+ */
 #ifndef RunTests
 int main(int ac, char **av)
 {
@@ -400,22 +421,12 @@ int main(int ac, char **av)
 		
 		std::cout << GREEN << "START OF PLATFORMER\n" << RESET;
 		std::cout << "Staring position on tile " << platformer.current << std::endl;
-		platformer.print_container(platformer.tiles, 0);
+		platformer.print_container(platformer.tiles, 0, -1);
 		
 		std::thread t(routine, std::ref(platformer));
 		
 		while(!platformer.stopSimulation())
 		{
-			/* platformer.mtx_game_over.lock();
-			platformer.isVictory();
-			if (platformer.gameOver)
-			{
-				platformer.mtx_game_over.unlock();
-				t.join();
-				throw std::logic_error(RED "\nGAME OVER\n" RESET);
-			}
-			platformer.mtx_game_over.unlock(); */
-			
 			int jump = rand() % 2;
 			jump ? platformer.jumpRight() : platformer.jumpLeft();
 		}
@@ -428,8 +439,6 @@ int main(int ac, char **av)
 		
 	} catch(std::logic_error &e) {
 		std::cout << e.what() << std::endl << std::flush;
-	} catch(std::exception &e) {
-		std::cout << RED << e.what() << RESET << std::endl << std::flush;
 	}
 	return 0;
 }
